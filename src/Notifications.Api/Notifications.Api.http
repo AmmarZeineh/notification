@@ -1,0 +1,58 @@
+# Manual testing against the running API (dotnet run --project src/Notifications.Api).
+# The X-User-Id / X-User-Roles headers are the development-only auth scheme.
+@baseUrl = http://localhost:5227
+@deviceToken = PASTE_A_REAL_FCM_TOKEN_FROM_THE_APP
+
+### Mobile app: register this device for user-1
+POST {{baseUrl}}/api/devices
+X-User-Id: user-1
+Content-Type: application/json
+
+{ "token": "{{deviceToken}}", "platform": "Android" }
+
+### Admin: send to all devices of user-1
+POST {{baseUrl}}/api/notifications/users/user-1
+X-User-Id: admin
+X-User-Roles: Admin
+Content-Type: application/json
+
+{ "title": "Subscription completed", "body": "Your subscription of 5,000 SAR was completed", "data": { "screen": "requests" } }
+
+### Admin: send to one device
+POST {{baseUrl}}/api/notifications/device
+X-User-Id: admin
+X-User-Roles: Admin
+Content-Type: application/json
+
+{ "token": "{{deviceToken}}", "notification": { "title": "Hello", "body": "Direct to one device" } }
+
+### Admin: subscribe the device to the "announcements" topic
+POST {{baseUrl}}/api/notifications/topics/announcements/subscribe
+X-User-Id: admin
+X-User-Roles: Admin
+Content-Type: application/json
+
+{ "tokens": ["{{deviceToken}}"] }
+
+### Admin: broadcast to the topic
+POST {{baseUrl}}/api/notifications/topics/announcements
+X-User-Id: admin
+X-User-Roles: Admin
+Content-Type: application/json
+
+{ "title": "Offices closed Friday", "body": "Our branches are closed for the national holiday" }
+
+### Admin: unsubscribe the device from the topic
+POST {{baseUrl}}/api/notifications/topics/announcements/unsubscribe
+X-User-Id: admin
+X-User-Roles: Admin
+Content-Type: application/json
+
+{ "tokens": ["{{deviceToken}}"] }
+
+### Mobile app: unregister on sign-out
+POST {{baseUrl}}/api/devices/unregister
+X-User-Id: user-1
+Content-Type: application/json
+
+{ "token": "{{deviceToken}}" }

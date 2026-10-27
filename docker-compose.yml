@@ -1,0 +1,16 @@
+# Local SQL Server for running the demo API. Development only.
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64 # runs on Apple Silicon through Docker Desktop's Rosetta emulation
+    environment:
+      ACCEPT_EULA: "Y"
+      # Read from .env (git-ignored) so no password is committed. See README "To send real notifications".
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+volumes:
+  sqlserver-data:
