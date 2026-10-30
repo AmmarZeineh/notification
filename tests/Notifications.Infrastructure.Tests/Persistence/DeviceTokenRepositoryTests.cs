@@ -214,6 +214,23 @@ public sealed class DeviceTokenRepositoryTests : IAsyncLifetime
         Assert.Empty(_context.ChangeTracker.Entries<DeviceToken>());
     }
 
+    [Fact]
+    public async Task Removes_only_tokens_last_seen_before_the_cutoff()
+    {
+        await using (var seed = CreateContext())
+        {
+            seed.AddRange(
+                DeviceToken.Create("user-1", "stale", DevicePlatform.Android, Now.AddDays(-300)),
+                DeviceToken.Create("user-1", "fresh", DevicePlatform.Ios, Now.AddDays(-10)));
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        var removed = await new DeviceTokenRepository(_context).RemoveTokensLastSeenBeforeAsync(Now.AddDays(-270), Ct);
+
+        Assert.Equal(1, removed);
+        Assert.Equal(["fresh"], await new DeviceTokenRepository(_context).GetTokensForUserAsync("user-1", 10, Ct));
+    }
+
     private NotificationsDbContext CreateContext() =>
         new(new DbContextOptionsBuilder<NotificationsDbContext>().UseSqliteAsSqlServer(_connection).Options);
 

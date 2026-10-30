@@ -8,7 +8,7 @@ host; only its controllers/contracts are meant to be reused.
 |---|---|---|
 | `src/Notifications.Domain` | Domain | `DeviceTokens/` |
 | `src/Notifications.Application` | Application | `Abstractions/`, `Common/`, `Models/`, `Services/`, `DependencyInjection.cs` |
-| `src/Notifications.Infrastructure` | Infrastructure | `Firebase/`, `Persistence/` (except `NotificationsDbContext` and its migrations), `DependencyInjection.cs` |
+| `src/Notifications.Infrastructure` | Infrastructure | `Firebase/`, `Cleanup/`, `Persistence/` (except `NotificationsDbContext` and its migrations), `DependencyInjection.cs` |
 | `src/Notifications.Api` | API / Web | `Controllers/`, `Contracts/`, `Extensions/`, `NotificationPolicies.cs` |
 | `src/Notifications.Api/Development/` | — | **Do not copy.** Development-only header authentication. |
 
@@ -84,8 +84,23 @@ or an `ICurrentUser` service.
 - Exactly one credential source must be set; the app fails at startup with a clear message otherwise.
 - Never commit the service-account JSON. Locally use `dotnet user-secrets`; in production use environment
   variables (`Firebase__CredentialsJson`) or the hosting platform's secret store.
-- The feature creates a **named** `FirebaseApp` ("notifications"), so it does not clash with any
+- The feature creates its own **named** `FirebaseApp` (prefixed "notifications-"), so it does not clash with any
   `FirebaseApp.DefaultInstance` the main project may already create.
+
+### Stale device tokens (optional)
+
+```json
+"DeviceTokenCleanup": {
+  "Enabled": true,
+  "StaleAfter": "270.00:00:00",   // delete tokens not re-registered for this long (minimum 30 days)
+  "Interval": "1.00:00:00"        // how often the cleanup runs
+}
+```
+
+Off by default. Firebase treats a token as expired after 270 days without use, so these tokens only cost wasted
+sends. **Enable it only once the app re-registers its token on every start** (see the mobile app contract below):
+the cleanup goes by the last registration, so without that, a phone that is still in use looks stale and loses
+its notifications. Each run is a single `DELETE`, run in its own scope.
 
 ## 5. Sending from application code
 
@@ -108,13 +123,15 @@ Firebase reports as unregistered are deleted automatically.
 
 | When | App calls |
 |---|---|
-| After sign-in, and whenever FCM gives a new token (`onNewToken`) | `POST /api/devices` `{ "token": "...", "platform": "Android" \| "Ios" }` |
+| After sign-in, on every app start while signed in, and whenever FCM gives a new token (`onNewToken`) | `POST /api/devices` `{ "token": "...", "platform": "Android" \| "Ios" }` |
 | On sign-out (then delete the FCM token on the device) | `POST /api/devices/unregister` `{ "token": "..." }` |
 | `POST /api/devices` returned **409** (token belongs to another user) | Delete the FCM token, get the new one, register it |
 
 - A token is never moved from one user to another: knowing a token does not prove owning the device.
   The app deletes its token on sign-out, so the next user on a shared phone registers a fresh one.
 - The token is always sent in the body, never in a URL, so it stays out of server and proxy logs.
+- Registering on every start is idempotent: it only refreshes the token's last-seen time, which the stale
+  token cleanup relies on.
 
 - Android 8+: the app must create the notification channel set in `Firebase:AndroidChannelId`.
   The Fonerium app creates `default_channel`, so keep that value.
