@@ -48,7 +48,10 @@ public static class NotificationErrors
     public static Error TooManyTokens(int max) => Error.Validation(
         "Notifications.TooManyTokens", $"A request may contain at most {max} device tokens. Split it into several requests.");
 
-    /// <remarks>Identifies the token by position, never by value: tokens are not echoed back into logs or responses.</remarks>
+    /// <remarks>
+    /// Identifies the token by position, not by value, so the malformed input never ends up in error logs.
+    /// (Send summaries do list the caller's own tokens, e.g. which ones to retry.)
+    /// </remarks>
     public static Error InvalidTokenAt(int position) => Error.Validation(
         "Notifications.InvalidToken", $"The device token at position {position} is malformed.");
 

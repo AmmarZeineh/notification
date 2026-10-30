@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Notifications.Application.Abstractions;
 using Notifications.Application.Common;
@@ -23,20 +22,14 @@ internal sealed partial class PushNotificationService(
     {
         ArgumentNullException.ThrowIfNull(notification);
 
-        if (ValidateContent(notification) is { } contentError)
+        if (PushNotificationValidator.ValidateContent(notification) is { } contentError)
         {
             return contentError;
         }
 
-        if (string.IsNullOrWhiteSpace(token))
+        if (PushNotificationValidator.NormalizeToken(token, out token) is { } tokenError)
         {
-            return NotificationErrors.NoTokens;
-        }
-
-        token = token.Trim();
-        if (!DeviceToken.IsValidToken(token))
-        {
-            return NotificationErrors.InvalidToken;
+            return tokenError;
         }
 
         var result = await sender.SendToTokenAsync(token, notification, cancellationToken).ConfigureAwait(false);
@@ -62,12 +55,12 @@ internal sealed partial class PushNotificationService(
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(notification);
 
-        if (ValidateContent(notification) is { } contentError)
+        if (PushNotificationValidator.ValidateContent(notification) is { } contentError)
         {
             return contentError;
         }
 
-        if (NormalizeTokens(tokens, out var distinctTokens) is { } tokenError)
+        if (PushNotificationValidator.NormalizeTokens(tokens, MaxTokensPerRequest, out var distinctTokens) is { } tokenError)
         {
             return tokenError;
         }
@@ -85,20 +78,15 @@ internal sealed partial class PushNotificationService(
             return NotificationErrors.InvalidUserId;
         }
 
-        if (ValidateContent(notification) is { } contentError)
+        if (PushNotificationValidator.ValidateContent(notification) is { } contentError)
         {
             return contentError;
         }
 
-        // One more than the cap, only to detect (and log) a user with more devices than one send allows.
+        // Real users have a handful of devices; the cap only keeps one request bounded.
         var tokens = await deviceTokens
-            .GetTokensForUserAsync(userId, MaxTokensPerRequest + 1, cancellationToken)
+            .GetTokensForUserAsync(userId, MaxTokensPerRequest, cancellationToken)
             .ConfigureAwait(false);
-        if (tokens.Count > MaxTokensPerRequest)
-        {
-            LogUserDevicesTruncated(MaxTokensPerRequest);
-            tokens = tokens.Take(MaxTokensPerRequest).ToList();
-        }
         if (tokens.Count == 0)
         {
             return NotificationErrors.UserHasNoDevices;
@@ -117,7 +105,7 @@ internal sealed partial class PushNotificationService(
             return NotificationErrors.InvalidTopic;
         }
 
-        if (ValidateContent(notification) is { } contentError)
+        if (PushNotificationValidator.ValidateContent(notification) is { } contentError)
         {
             return contentError;
         }
@@ -130,7 +118,7 @@ internal sealed partial class PushNotificationService(
 
         if (!result.IsSuccess)
         {
-            return ToError(result.Failure, result.FailureReason);
+            return DeliveryErrorPolicy.ForFailure(result.Failure, result.FailureReason);
         }
 
         LogTopicSent(topic, result.MessageId!);
@@ -155,7 +143,7 @@ internal sealed partial class PushNotificationService(
             return NotificationErrors.InvalidTopic;
         }
 
-        if (NormalizeTokens(tokens, out var distinctTokens) is { } tokenError)
+        if (PushNotificationValidator.NormalizeTokens(tokens, MaxTokensPerRequest, out var distinctTokens) is { } tokenError)
         {
             return tokenError;
         }
@@ -176,7 +164,7 @@ internal sealed partial class PushNotificationService(
         // Otherwise the per-token results are returned, including the tokens that were never processed.
         if (result.ProviderFailure is { } providerFailure && result.UnprocessedCount == distinctTokens.Count)
         {
-            return ToError(providerFailure, result.Failures.Count > 0 ? result.Failures[0].Reason : null);
+            return DeliveryErrorPolicy.ForFailure(providerFailure, result.Failures.Count > 0 ? result.Failures[0].Reason : null);
         }
 
         return result with { RemovedInvalidTokenCount = removed };
@@ -187,15 +175,16 @@ internal sealed partial class PushNotificationService(
     {
         var results = await sender.SendToTokensAsync(tokens, notification, cancellationToken).ConfigureAwait(false);
         var outcome = await ProcessResultsAsync(results, notification).ConfigureAwait(false);
+        var failureCount = results.Count - outcome.SuccessCount;
 
-        LogBatchSent(tokens.Count, outcome.SuccessCount, results.Count - outcome.SuccessCount);
+        LogBatchSent(tokens.Count, outcome.SuccessCount, failureCount);
 
         if (outcome.Error is { } error)
         {
             return error;
         }
 
-        return new BatchSendSummary(outcome.SuccessCount, results.Count - outcome.SuccessCount, outcome.RemovedCount)
+        return new BatchSendSummary(outcome.SuccessCount, failureCount, outcome.RemovedCount)
         {
             RetryableTokens = TokensThatFailedWith(results, DeliveryFailure.Unavailable),
             UnconfirmedTokens = TokensThatFailedWith(results, DeliveryFailure.Unknown),
@@ -204,76 +193,35 @@ internal sealed partial class PushNotificationService(
 
     /// <summary>
     /// Shared by single and multi-device sends: removes the tokens the provider reported as unregistered and,
-    /// when nothing was delivered, picks the error to return (null when the tokens themselves are at fault).
+    /// when nothing was delivered, picks the error to return (see <see cref="DeliveryErrorPolicy.WhenNothingDelivered"/>).
     /// </summary>
     /// <remarks>
     /// Only an explicit "unregistered" deletes a token. Providers report a malformed token and an invalid
-    /// message the same way, and no check proves which one it was for every platform, so those tokens are
-    /// kept: a stale token costs one wasted send, a wrongly deleted one silently loses a user's device.
-    /// The dry-run validation is used only to tell the caller whether the message must change.
-    /// Runs after the send, so the caller's cancellation is not used (see <see cref="RemoveInvalidTokensAsync"/>).
+    /// message the same way, so those tokens are kept: a stale token costs one wasted send, a wrongly deleted
+    /// one silently loses a user's device. The dry run only tells the caller whether the message must change.
     /// </remarks>
     private async Task<DeliveryOutcome> ProcessResultsAsync(IReadOnlyList<TokenSendResult> results, PushNotification notification)
     {
+        var removed = await RemoveInvalidTokensAsync(TokensThatFailedWith(results, DeliveryFailure.InvalidToken)).ConfigureAwait(false);
         var successCount = results.Count(r => r.Result.IsSuccess);
 
-        var invalidTokens = results
-            .Where(r => r.Result.Failure == DeliveryFailure.InvalidToken)
-            .Select(r => r.Token)
-            .ToList();
-        var removed = await RemoveInvalidTokensAsync(invalidTokens).ConfigureAwait(false);
-
-        // The one rule for possibly-delivered tokens: when any outcome is unknown, the summary is always
-        // returned (never an error that implies a retry is safe, never an exception that loses the results).
-        // So validation is skipped too: its only purpose is to choose an error.
+        // When anything was, or may have been, delivered, the summary is always returned: an error would
+        // imply that a retry is safe.
         if (successCount > 0 || results.Any(r => r.Result.Failure == DeliveryFailure.Unknown))
         {
             return new DeliveryOutcome(successCount, removed, null);
         }
 
-        var invalidRequest = results.FirstOrDefault(r => r.Result.Failure == DeliveryFailure.InvalidRequest);
-        var validation = invalidRequest is null ? null : await ValidateMessageAsync(notification).ConfigureAwait(false);
-        return new DeliveryOutcome(successCount, removed, ToNoDeliveryError(results, removed, invalidRequest, validation));
+        var validation = results.Any(r => r.Result.Failure == DeliveryFailure.InvalidRequest)
+            ? await ValidateMessageAsync(notification).ConfigureAwait(false)
+            : null;
+        return new DeliveryOutcome(0, removed, DeliveryErrorPolicy.WhenNothingDelivered(results, removed, validation));
     }
 
     /// <remarks>
-    /// An error replaces the summary, so one is returned only when the summary would tell the caller nothing
-    /// actionable: every token failed temporarily (retry everything), the message must change, or a
-    /// configuration problem hit every device. Otherwise the summary carries what to retry and what was removed.
-    /// </remarks>
-    private static Error? ToNoDeliveryError(
-        IReadOnlyList<TokenSendResult> results, int removed, TokenSendResult? invalidRequest, SendResult? validation)
-    {
-        // Only called when nothing was delivered and no outcome is unknown, so a retry can never duplicate.
-        // Nothing went out because the provider is down or throttling (possibly only while validating; a dry
-        // run delivers nothing, so one that got no answer is simply an outage): retry later.
-        if (validation?.Failure is DeliveryFailure.Unavailable or DeliveryFailure.Unknown ||
-            results.All(r => r.Result.Failure == DeliveryFailure.Unavailable))
-        {
-            return NotificationErrors.ProviderUnavailable;
-        }
-
-        if (invalidRequest is not null && validation is { IsSuccess: false })
-        {
-            // The provider rejected the message on its own too, so the message is what must change.
-            return ToError(validation.Failure, validation.FailureReason ?? invalidRequest.Result.FailureReason);
-        }
-
-        // A configuration problem (credentials, APNs key) that callers must not mistake for a successful send,
-        // unless some tokens can still be retried or were removed: then the summary is what the caller needs.
-        var hasRetryable = results.Any(r => r.Result.Failure == DeliveryFailure.Unavailable);
-        if (!hasRetryable && removed == 0 && results.Any(r => r.Result.Failure == DeliveryFailure.Rejected))
-        {
-            return NotificationErrors.ProviderRejected;
-        }
-
-        return null;
-    }
-
-    /// <remarks>
-    /// Provider and network failures come back as a result. Anything thrown is a real fault (e.g. broken
-    /// credentials) and is left to surface: it only runs when nothing was delivered or possibly delivered,
-    /// so no outcome is lost.
+    /// Runs after the send, so the caller's cancellation is not used. Provider and network failures come back
+    /// as a result; anything thrown is a real fault (e.g. broken credentials) and is left to surface. It only
+    /// runs when nothing was, or may have been, delivered, so no outcome is lost.
     /// </remarks>
     private Task<SendResult> ValidateMessageAsync(PushNotification notification) =>
         sender.ValidateAsync(notification, CancellationToken.None);
@@ -307,76 +255,6 @@ internal sealed partial class PushNotificationService(
         }
     }
 
-    private static Error? ValidateContent(PushNotification notification)
-    {
-        if (notification.IsEmpty)
-        {
-            return NotificationErrors.EmptyNotification;
-        }
-
-        if (!notification.HasValidImageUrl)
-        {
-            return NotificationErrors.InvalidImageUrl;
-        }
-
-        if (!notification.HasValidData)
-        {
-            return NotificationErrors.InvalidData;
-        }
-
-        // A data-only message has no visible notification to attach the image to; it would be dropped silently.
-        if (notification.ImageUrl is not null && !notification.HasVisibleContent)
-        {
-            return NotificationErrors.ImageWithoutVisibleContent;
-        }
-
-        return notification.FindReservedDataKey() is { } key ? NotificationErrors.ReservedDataKey(key) : null;
-    }
-
-    /// <summary>Trims and de-duplicates the tokens, ignoring blank entries; rejects malformed ones and oversized requests.</summary>
-    private static Error? NormalizeTokens(IReadOnlyCollection<string> tokens, out List<string> normalized)
-    {
-        normalized = [];
-        if (tokens.Count > MaxTokensPerRequest)
-        {
-            return NotificationErrors.TooManyTokens(MaxTokensPerRequest);
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var position = 0;
-        foreach (var raw in tokens)
-        {
-            position++;
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                continue;
-            }
-
-            var token = raw.Trim();
-            if (!DeviceToken.IsValidToken(token))
-            {
-                return NotificationErrors.InvalidTokenAt(position);
-            }
-
-            if (seen.Add(token))
-            {
-                normalized.Add(token);
-            }
-        }
-
-        return normalized.Count == 0 ? NotificationErrors.NoTokens : null;
-    }
-
-    private static Error ToError(DeliveryFailure? failure, string? reason) => failure switch
-    {
-        DeliveryFailure.InvalidToken => NotificationErrors.InvalidToken,
-        DeliveryFailure.Unavailable => NotificationErrors.ProviderUnavailable,
-        // Unknown outcomes are reported as unconfirmed results, never as an error (see ProcessResultsAsync).
-        DeliveryFailure.Unknown => throw new UnreachableException("An unknown delivery outcome must not become an error."),
-        DeliveryFailure.InvalidRequest => NotificationErrors.InvalidRequest(reason ?? "unknown"),
-        _ => NotificationErrors.ProviderRejected,
-    };
-
     private static List<string> TokensThatFailedWith(IReadOnlyList<TokenSendResult> results, DeliveryFailure failure) =>
         results.Where(r => r.Result.Failure == failure).Select(r => r.Token).ToList();
 
@@ -385,9 +263,6 @@ internal sealed partial class PushNotificationService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Sent push notification to {TokenCount} device(s): {SuccessCount} succeeded, {FailureCount} failed")]
     private partial void LogBatchSent(int tokenCount, int successCount, int failureCount);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "User has more devices than one send allows; sent to the {Limit} most recently seen")]
-    private partial void LogUserDevicesTruncated(int limit);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Removed {Count} invalid device token(s)")]
     private partial void LogInvalidTokensRemoved(int count);

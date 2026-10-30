@@ -69,6 +69,17 @@ public sealed class PushNotificationServiceTests
         await _sender.DidNotReceiveWithAnyArgs().SendToTokenAsync(default!, default!, Ct);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SendToDevice_rejects_a_blank_token_without_calling_provider(string token)
+    {
+        var result = await _service.SendToDeviceAsync(token, Notification, Ct);
+
+        Assert.Equal(NotificationErrors.InvalidToken, result.Error);
+        await _sender.DidNotReceiveWithAnyArgs().SendToTokenAsync(default!, default!, Ct);
+    }
+
     [Fact]
     public async Task SendToDevice_allows_data_only_notification()
     {
@@ -658,10 +669,10 @@ public sealed class PushNotificationServiceTests
     }
 
     [Fact]
-    public async Task SendToUser_sends_to_at_most_the_per_request_limit()
+    public async Task SendToUser_reads_at_most_the_per_request_limit()
     {
-        var many = Enumerable.Range(0, PushNotificationService.MaxTokensPerRequest + 1).Select(i => $"t{i}").ToList();
-        _repository.GetTokensForUserAsync("user-1", PushNotificationService.MaxTokensPerRequest + 1, Arg.Any<CancellationToken>())
+        var many = Enumerable.Range(0, PushNotificationService.MaxTokensPerRequest).Select(i => $"t{i}").ToList();
+        _repository.GetTokensForUserAsync("user-1", PushNotificationService.MaxTokensPerRequest, Arg.Any<CancellationToken>())
             .Returns(many);
         _sender.SendToTokensAsync(Arg.Any<IReadOnlyList<string>>(), Notification, Arg.Any<CancellationToken>())
             .Returns(ci => ci.Arg<IReadOnlyList<string>>().Select(t => new TokenSendResult(t, SendResult.Delivered("m"))).ToList());

@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Notifications.Application.Abstractions;
+using Notifications.Infrastructure.Cleanup;
 using Notifications.Infrastructure.Firebase;
 using Notifications.Infrastructure.Persistence;
 
@@ -35,6 +36,13 @@ public static class DependencyInjection
         // The request's own DbContext, so per-request state the host's context relies on (tenant, audit user,
         // transaction) applies to device tokens too. See INTEGRATION.md about pending changes being saved with it.
         services.TryAddScoped<IDeviceTokenRepository>(sp => new DeviceTokenRepository(sp.GetRequiredService<TDbContext>()));
+
+        services.AddOptions<DeviceTokenCleanupOptions>()
+            .Bind(configuration.GetSection(DeviceTokenCleanupOptions.SectionName))
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<DeviceTokenCleanupOptions>, DeviceTokenCleanupOptionsValidator>());
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddHostedService<DeviceTokenCleanupService>();
 
         return services;
     }
