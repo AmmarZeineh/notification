@@ -14,11 +14,13 @@ It is designed to be merged into the main project; see **[INTEGRATION.md](INTEGR
 | Send to a topic | `SendToTopicAsync` | `POST /api/notifications/topics/{topic}` |
 | Subscribe / unsubscribe devices to a topic | `SubscribeToTopicAsync` / `UnsubscribeFromTopicAsync` | `POST /api/notifications/topics/{topic}/subscribe` / `unsubscribe` |
 
-Tokens that Firebase reports as unregistered or malformed (app uninstalled, token rotated) are removed automatically,
-on sends and on topic subscribe/unsubscribe. A token is only treated as malformed once Firebase has accepted the message
-itself in a dry-run validation, so one bad message never deletes valid tokens. A delivery to another device is not taken
-as proof, because the Android and iOS parts of a message can fail independently, and a failure of a whole batch never
-deletes tokens.
+Tokens that Firebase reports as unregistered (app uninstalled, token expired) are removed automatically, on sends
+and on topic subscribe/unsubscribe. A token Firebase calls malformed is kept: Firebase reports a bad token and a bad
+message the same way, and wrongly deleting a token silently loses a user's device. When every device fails that way,
+a dry-run validation tells the caller whether the message itself must change. A failure of a whole batch never deletes
+tokens.
+Tokens the app has not re-registered for 270 days can also be removed by an optional daily cleanup
+(see [INTEGRATION.md](INTEGRATION.md#4-configuration)).
 Wrong credentials (`SENDER_ID_MISMATCH`, permission errors) return 502 and never delete tokens.
 
 A multi-device send returns `retryableTokens`: the tokens that failed only for a temporary reason (outage, quota).

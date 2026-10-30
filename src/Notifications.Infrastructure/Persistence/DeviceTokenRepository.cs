@@ -5,7 +5,10 @@ using Notifications.Domain.DeviceTokens;
 
 namespace Notifications.Infrastructure.Persistence;
 
-/// <summary>Works against any DbContext whose model includes <see cref="DeviceToken"/>.</summary>
+/// <summary>
+/// Works against any DbContext whose model includes <see cref="DeviceToken"/>, on SQL Server: duplicate
+/// registrations are recognised by SQL Server error numbers, and the model uses a SQL Server collation.
+/// </summary>
 internal sealed class DeviceTokenRepository(DbContext dbContext) : IDeviceTokenRepository
 {
     /// <summary>
@@ -59,6 +62,17 @@ internal sealed class DeviceTokenRepository(DbContext dbContext) : IDeviceTokenR
 
         var deleted = tokens.ToHashSet(StringComparer.Ordinal);
         DetachTracked(d => deleted.Contains(d.Token));
+        return removed;
+    }
+
+    public async Task<int> RemoveTokensLastSeenBeforeAsync(DateTimeOffset cutoff, CancellationToken cancellationToken)
+    {
+        var removed = await DeviceTokens
+            .Where(d => d.LastSeenAt < cutoff)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        DetachTracked(d => d.LastSeenAt < cutoff);
         return removed;
     }
 

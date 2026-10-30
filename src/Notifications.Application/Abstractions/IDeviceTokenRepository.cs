@@ -20,6 +20,12 @@ public interface IDeviceTokenRepository
     /// <summary>Deletes the given tokens immediately (no <see cref="SaveChangesAsync"/> needed). Returns the number removed.</summary>
     Task<int> RemoveTokensAsync(IReadOnlyCollection<string> tokens, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Deletes tokens whose app has not re-registered since <paramref name="cutoff"/> (no <see cref="SaveChangesAsync"/>
+    /// needed). Returns the number removed.
+    /// </summary>
+    Task<int> RemoveTokensLastSeenBeforeAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);
+
     /// <exception cref="DeviceTokenConflictException">A concurrent request changed the same token first.</exception>
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

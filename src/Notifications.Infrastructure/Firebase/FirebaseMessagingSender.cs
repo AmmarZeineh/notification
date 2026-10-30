@@ -131,17 +131,23 @@ internal sealed partial class FirebaseMessagingSender : IPushNotificationSender,
             var messageId = await messaging.SendAsync(message, dryRun, CancellationToken.None).ConfigureAwait(false);
             return SendResult.Delivered(messageId);
         }
-        catch (Exception ex) when (!dryRun && FcmErrorMapper.Classify(ex) is null)
+        catch (Exception ex)
         {
-            // Unexpected, but the request was in flight: the message may have been delivered. A dry run
-            // delivers nothing, so there the exception is left to surface as the bug it is.
+            if (FcmErrorMapper.Classify(ex) is { } failure)
+            {
+                LogSendFailed(ex, target, failure);
+                return SendResult.Failed(failure, ex.Message);
+            }
+
+            // A dry run delivers nothing, so there an unexpected exception surfaces as the bug it is.
+            if (dryRun)
+            {
+                throw;
+            }
+
+            // Unexpected, but the request was in flight: the message may have been delivered.
             LogSendFailedUnexpectedly(ex, target);
             return SendResult.Failed(DeliveryFailure.Unknown, "The provider request failed unexpectedly.");
-        }
-        catch (Exception ex) when (FcmErrorMapper.Classify(ex) is { } failure)
-        {
-            LogSendFailed(ex, target, failure);
-            return SendResult.Failed(failure, ex.Message);
         }
     }
 
