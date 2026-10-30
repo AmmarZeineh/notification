@@ -69,15 +69,10 @@ internal sealed partial class DeviceRegistrationService(
     public async Task<Result> UnregisterAsync(string userId, string token, CancellationToken cancellationToken = default)
     {
         // The same rules as registration, so a malformed token is a 400 rather than a 404 from the delete.
-        if (!DeviceToken.IsValidUserId(userId))
-        {
-            return NotificationErrors.InvalidUserId;
-        }
-
         token = token?.Trim() ?? string.Empty;
-        if (!DeviceToken.IsValidToken(token))
+        if (ToError(DeviceToken.FindInvalidField(userId, token)) is { } error)
         {
-            return NotificationErrors.InvalidToken;
+            return error;
         }
 
         // A single conditional delete: another user's token is reported as "not found" so callers cannot
@@ -87,7 +82,10 @@ internal sealed partial class DeviceRegistrationService(
     }
 
     private static Error? Validate(string userId, string token, DevicePlatform platform) =>
-        DeviceToken.FindInvalidField(userId, token, platform) switch
+        ToError(DeviceToken.FindInvalidField(userId, token, platform));
+
+    private static Error? ToError(DeviceTokenField? invalidField) =>
+        invalidField switch
         {
             null => null,
             DeviceTokenField.UserId => NotificationErrors.InvalidUserId,

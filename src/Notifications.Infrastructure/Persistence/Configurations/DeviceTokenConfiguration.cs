@@ -42,6 +42,11 @@ public sealed class DeviceTokenConfiguration : IEntityTypeConfiguration<DeviceTo
 
         // A token identifies one app installation, so it can only belong to one user at a time.
         builder.HasIndex(d => d.Token).IsUnique();
-        builder.HasIndex(d => d.UserId);
+
+        // Covers the send-to-user query (a user's most recently seen tokens) with one ordered seek, no key
+        // lookups or sort; the leading UserId also serves every other per-user lookup.
+        builder.HasIndex(d => new { d.UserId, d.LastSeenAt })
+            .IsDescending(false, true)
+            .IncludeProperties(d => d.Token);
     }
 }

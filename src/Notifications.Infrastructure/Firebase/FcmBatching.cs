@@ -18,9 +18,11 @@ namespace Notifications.Infrastructure.Firebase;
 /// <c>classifyFailure</c> returns the failure for a provider exception, or null for an unexpected one.
 /// The batch delegate must report an unexpected failure during the request itself as a classified
 /// <see cref="DeliveryFailure.Unknown"/> (the request may have been processed); an unclassified exception
-/// therefore means the batch was never sent. After any batch failure, batches that have not started are
-/// skipped and reported as <see cref="DeliveryFailure.Unavailable"/>: never sent, so safe to resend.
-/// An unexpected exception is rethrown only if nothing was, or may have been, delivered; otherwise every
+/// therefore means the batch was never sent, and is reported as <see cref="DeliveryFailure.Rejected"/>: a local
+/// fault (e.g. unreadable credentials) that a retry would hit again. After any batch failure, batches that have
+/// not started are skipped. They inherit a <see cref="DeliveryFailure.Rejected"/> failure, since they would be
+/// rejected too; after any other failure they are reported as <see cref="DeliveryFailure.Unavailable"/>: never
+/// sent, so safe to resend. An unexpected exception is rethrown only if nothing was, or may have been, delivered; otherwise every
 /// result is kept. Reasons for whole-batch failures are generic: raw provider text stays in the logs.
 /// </para>
 /// </remarks>
@@ -117,11 +119,17 @@ internal static class FcmBatching
             {
                 var failure = ClassifyBatchFailure(classifyFailure, ex);
 
-                // Unclassified means it failed before the request started (see the class remarks): not sent.
+                // Unclassified means it failed before the request started (see the class remarks): not sent, and
+                // a local fault such as unreadable credentials, which a retry would hit again.
                 var failed = failure is { } known
                     ? new BatchOutcome<T>(default, known, $"The provider failed the whole request ({known}).")
-                    : new BatchOutcome<T>(default, DeliveryFailure.Unavailable, "Not sent: the request could not be started.");
-                var skipped = new BatchOutcome<T>(default, DeliveryFailure.Unavailable, "Not sent: an earlier batch failed.");
+                    : new BatchOutcome<T>(default, DeliveryFailure.Rejected, "Not sent: the request could not be started.");
+
+                // Skipped batches would fail the same way, so a permanent failure is passed on rather than
+                // hidden behind a retryable one. Anything else (an outage, no answer) leaves them merely unsent.
+                var skipped = failed.Failure == DeliveryFailure.Rejected
+                    ? new BatchOutcome<T>(default, DeliveryFailure.Rejected, "Not sent: an earlier batch was rejected.")
+                    : new BatchOutcome<T>(default, DeliveryFailure.Unavailable, "Not sent: an earlier batch failed.");
                 lock (stopLock)
                 {
                     stopReason ??= skipped;

@@ -12,10 +12,9 @@ internal static class DeliveryErrorPolicy
     /// send a duplicate). Null means the summary is more useful to the caller than an error. The rules apply in order.
     /// </summary>
     /// <param name="results">The per-device results of the send.</param>
-    /// <param name="removedCount">Tokens deleted because the provider reported them as unregistered.</param>
     /// <param name="validation">The dry-run result, present only when some device reported an invalid request.</param>
     public static Error? WhenNothingDelivered(
-        IReadOnlyList<TokenSendResult> results, int removedCount, SendResult? validation)
+        IReadOnlyList<TokenSendResult> results, SendResult? validation)
     {
         var failures = results.Select(r => r.Result.Failure).ToList();
 
@@ -34,16 +33,10 @@ internal static class DeliveryErrorPolicy
             return ForFailure(validation.Failure, validation.FailureReason ?? deviceReason);
         }
 
-        // 3. A configuration problem (credentials, APNs key) hit every device. Skipped when some tokens can be
-        //    retried or were removed, because then the summary is what the caller needs.
-        if (failures.Contains(DeliveryFailure.Rejected) &&
-            !failures.Contains(DeliveryFailure.Unavailable) &&
-            removedCount == 0)
-        {
-            return NotificationErrors.ProviderRejected;
-        }
-
-        return null;
+        // 3. A configuration problem (credentials, APNs key) that callers must not mistake for a partial failure.
+        //    It wins even when other tokens were removed or are retryable: a retry cannot reach the rejected
+        //    devices until the configuration is fixed, and the removed tokens are already gone either way.
+        return failures.Contains(DeliveryFailure.Rejected) ? NotificationErrors.ProviderRejected : null;
     }
 
     /// <summary>The error for a single failed provider call (a topic send or a whole subscription request).</summary>

@@ -536,7 +536,7 @@ public sealed class PushNotificationServiceTests
     }
 
     [Fact]
-    public async Task SendToUser_returns_the_summary_when_a_rejected_device_sits_next_to_a_retryable_one()
+    public async Task SendToUser_returns_provider_rejected_when_a_rejected_device_sits_next_to_a_retryable_one()
     {
         _repository.GetTokensForUserAsync("user-1", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(["ios", "android"]);
         _sender.SendToTokensAsync(Arg.Any<IReadOnlyList<string>>(), Notification, Arg.Any<CancellationToken>())
@@ -548,7 +548,27 @@ public sealed class PushNotificationServiceTests
 
         var result = await _service.SendToUserAsync("user-1", Notification, Ct);
 
-        Assert.Equal(["android"], result.Value.RetryableTokens);
+        Assert.Equal(NotificationErrors.ProviderRejected, result.Error);
+    }
+
+    [Fact]
+    public async Task SendToUser_returns_provider_rejected_even_when_a_stale_device_was_removed()
+    {
+        _repository.GetTokensForUserAsync("user-1", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(["ios", "stale"]);
+        _repository.RemoveTokensAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>()).Returns(1);
+        _sender.SendToTokensAsync(Arg.Any<IReadOnlyList<string>>(), Notification, Arg.Any<CancellationToken>())
+            .Returns(new List<TokenSendResult>
+            {
+                new("ios", SendResult.Failed(DeliveryFailure.Rejected, "APNs auth key missing")),
+                new("stale", SendResult.Failed(DeliveryFailure.InvalidToken, "unregistered")),
+            });
+
+        var result = await _service.SendToUserAsync("user-1", Notification, Ct);
+
+        // The stale token is still cleaned up, but the configuration fault is what the caller must see.
+        Assert.Equal(NotificationErrors.ProviderRejected, result.Error);
+        await _repository.Received(1).RemoveTokensAsync(
+            Arg.Is<IReadOnlyCollection<string>>(t => t.SequenceEqual(new[] { "stale" })), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -570,6 +590,19 @@ public sealed class PushNotificationServiceTests
 
         Assert.Equal("Notifications.TooManyTokens", result.Error!.Code);
         await _sender.DidNotReceiveWithAnyArgs().SendToTokensAsync(default!, default!, Ct);
+    }
+
+    [Fact]
+    public async Task SendToDevices_applies_the_token_limit_after_dropping_blanks_and_duplicates()
+    {
+        var distinct = Enumerable.Range(0, PushNotificationService.MaxTokensPerRequest).Select(i => $"t{i}").ToList();
+        var tokens = distinct.Concat(["t0", " ", ""]).ToList();
+        _sender.SendToTokensAsync(Arg.Any<IReadOnlyList<string>>(), Notification, Arg.Any<CancellationToken>())
+            .Returns(call => call.Arg<IReadOnlyList<string>>().Select(t => new TokenSendResult(t, SendResult.Delivered($"m-{t}"))).ToList());
+
+        var result = await _service.SendToDevicesAsync(tokens, Notification, Ct);
+
+        Assert.Equal(PushNotificationService.MaxTokensPerRequest, result.Value.SuccessCount);
     }
 
     [Fact]

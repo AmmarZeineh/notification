@@ -9,7 +9,7 @@ It is designed to be merged into the main project; see **[INTEGRATION.md](INTEGR
 |---|---|---|
 | Register / unregister a device for the signed-in user | `IDeviceRegistrationService` | `POST /api/devices`, `POST /api/devices/unregister` |
 | Send to one device | `SendToDeviceAsync` | `POST /api/notifications/device` |
-| Send to many devices (up to 10,000 per request, batched automatically) | `SendToDevicesAsync` | `POST /api/notifications/devices` |
+| Send to many devices (up to 10,000 distinct tokens per request, batched automatically) | `SendToDevicesAsync` | `POST /api/notifications/devices` |
 | Send to all devices of a user | `SendToUserAsync` | `POST /api/notifications/users/{userId}` |
 | Send to a topic | `SendToTopicAsync` | `POST /api/notifications/topics/{topic}` |
 | Subscribe / unsubscribe devices to a topic | `SubscribeToTopicAsync` / `UnsubscribeFromTopicAsync` | `POST /api/notifications/topics/{topic}/subscribe` / `unsubscribe` |
@@ -21,7 +21,9 @@ a dry-run validation tells the caller whether the message itself must change. A 
 tokens.
 Tokens the app has not re-registered for 270 days can also be removed by an optional daily cleanup
 (see [INTEGRATION.md](INTEGRATION.md#4-configuration)).
-Wrong credentials (`SENDER_ID_MISMATCH`, permission errors) return 502 and never delete tokens.
+Wrong credentials (`SENDER_ID_MISMATCH`, permission errors, a broken APNs key) return 502 and never delete tokens.
+When nothing was delivered, a rejection wins over everything else: even if some tokens were removed or failed
+temporarily, the answer is 502 rather than a summary, because no retry helps until the configuration is fixed.
 
 A multi-device send returns `retryableTokens`: the tokens that failed only for a temporary reason (outage, quota).
 Resend to those alone, never to everyone, so nobody gets the notification twice. `unconfirmedTokens` are the ones

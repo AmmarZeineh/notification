@@ -55,7 +55,10 @@ namespace Notifications.Infrastructure.Persistence.Migrations
                     b.HasIndex("Token")
                         .IsUnique();
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("UserId", "LastSeenAt")
+                        .IsDescending(false, true);
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("UserId", "LastSeenAt"), new[] { "Token" });
 
                     b.ToTable("DeviceTokens", (string)null);
                 });

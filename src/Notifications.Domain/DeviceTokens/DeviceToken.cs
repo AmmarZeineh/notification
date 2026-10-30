@@ -63,19 +63,19 @@ public sealed class DeviceToken
     /// exception thrown by <see cref="Create"/>) check this first.
     /// </summary>
     /// <returns>The first invalid field, or <see langword="null"/> when all values are valid.</returns>
-    public static DeviceTokenField? FindInvalidField(string? userId, string? token, DevicePlatform platform)
+    public static DeviceTokenField? FindInvalidField(string? userId, string? token, DevicePlatform platform) =>
+        FindInvalidField(userId, token) ?? (Enum.IsDefined(platform) ? null : DeviceTokenField.Platform);
+
+    /// <summary>The same rules for the user id and token alone, for operations that take no platform.</summary>
+    /// <returns>The first invalid field, or <see langword="null"/> when both values are valid.</returns>
+    public static DeviceTokenField? FindInvalidField(string? userId, string? token)
     {
         if (!IsValidUserId(userId))
         {
             return DeviceTokenField.UserId;
         }
 
-        if (!IsValidToken(token))
-        {
-            return DeviceTokenField.Token;
-        }
-
-        return Enum.IsDefined(platform) ? null : DeviceTokenField.Platform;
+        return IsValidToken(token) ? null : DeviceTokenField.Token;
     }
 
     public static bool IsValidUserId([NotNullWhen(true)] string? userId) =>

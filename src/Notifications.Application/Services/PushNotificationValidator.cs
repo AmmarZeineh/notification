@@ -44,11 +44,6 @@ internal static class PushNotificationValidator
     public static Error? NormalizeTokens(IReadOnlyCollection<string> tokens, int maxTokens, out List<string> normalized)
     {
         normalized = [];
-        if (tokens.Count > maxTokens)
-        {
-            return NotificationErrors.TooManyTokens(maxTokens);
-        }
-
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var position = 0;
         foreach (var raw in tokens)
@@ -67,6 +62,12 @@ internal static class PushNotificationValidator
 
             if (seen.Add(token))
             {
+                // Counted after blanks and duplicates are dropped: the cap is on what would actually be sent.
+                if (normalized.Count == maxTokens)
+                {
+                    return NotificationErrors.TooManyTokens(maxTokens);
+                }
+
                 normalized.Add(token);
             }
         }

@@ -215,7 +215,7 @@ internal sealed partial class PushNotificationService(
         var validation = results.Any(r => r.Result.Failure == DeliveryFailure.InvalidRequest)
             ? await ValidateMessageAsync(notification).ConfigureAwait(false)
             : null;
-        return new DeliveryOutcome(0, removed, DeliveryErrorPolicy.WhenNothingDelivered(results, removed, validation));
+        return new DeliveryOutcome(0, removed, DeliveryErrorPolicy.WhenNothingDelivered(results, validation));
     }
 
     /// <remarks>

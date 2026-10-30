@@ -94,9 +94,41 @@ public sealed class FcmBatchingTests
             Classify,
             Ct);
 
-        // The failed batch is never reported as a token or message problem; the batch skipped after it is retryable.
-        Assert.All(results.Skip(2).Take(2), r => Assert.Equal(DeliveryFailure.Rejected, r.Result.Failure));
-        Assert.Equal(DeliveryFailure.Unavailable, results[4].Result.Failure);
+        // The failed batch is never reported as a token or message problem, and the batch skipped after it
+        // inherits the rejection rather than being reported as retryable.
+        Assert.All(results.Skip(2), r => Assert.Equal(DeliveryFailure.Rejected, r.Result.Failure));
+    }
+
+    [Fact]
+    public async Task Send_reports_batches_skipped_after_a_rejection_as_rejected_not_retryable()
+    {
+        var results = await FcmBatching.SendAsync(
+            Tokens,
+            batchSize: 2,
+            maxConcurrency: 1,
+            _ => throw new BadRequestException(),
+            Classify,
+            Ct);
+
+        // Bad credentials fail every batch the same way; nothing here may look like a temporary outage.
+        Assert.All(results, r => Assert.Equal(DeliveryFailure.Rejected, r.Result.Failure));
+    }
+
+    [Fact]
+    public async Task Send_reports_batches_skipped_after_an_outage_as_retryable()
+    {
+        var calls = 0;
+
+        var results = await FcmBatching.SendAsync(
+            Tokens,
+            batchSize: 2,
+            maxConcurrency: 1,
+            batch => ++calls == 1 ? throw new ProviderOutageException() : DeliverAll(batch),
+            Classify,
+            Ct);
+
+        Assert.Equal(1, calls);
+        Assert.All(results, r => Assert.Equal(DeliveryFailure.Unavailable, r.Result.Failure));
     }
 
     [Fact]
@@ -150,9 +182,10 @@ public sealed class FcmBatchingTests
             Classify,
             Ct);
 
-        // An unclassified exception means batch 2 never started; it and the skipped batch 3 are safe to retry.
+        // An unclassified exception means batch 2 never started, because of a local fault a retry would hit
+        // again: it and the skipped batch 3 are rejected, not reported as a temporary outage.
         Assert.All(results.Take(2), r => Assert.True(r.Result.IsSuccess));
-        Assert.All(results.Skip(2), r => Assert.Equal(DeliveryFailure.Unavailable, r.Result.Failure));
+        Assert.All(results.Skip(2), r => Assert.Equal(DeliveryFailure.Rejected, r.Result.Failure));
         Assert.Equal(2, calls);
     }
 
