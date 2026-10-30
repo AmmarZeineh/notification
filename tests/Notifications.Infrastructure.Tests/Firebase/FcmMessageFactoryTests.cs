@@ -1,5 +1,6 @@
 using FirebaseAdmin.Messaging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Notifications.Application.Models;
 using Notifications.Infrastructure.Firebase;
 
@@ -7,11 +8,13 @@ namespace Notifications.Infrastructure.Tests.Firebase;
 
 public sealed class FcmMessageFactoryTests
 {
+    private static readonly DateTimeOffset Now = new(2026, 10, 30, 9, 15, 0, TimeSpan.FromHours(3));
+
     private readonly FcmMessageFactory _factory = new(Options.Create(new FirebaseOptions
     {
         AndroidChannelId = "alerts",
         Sound = "default",
-    }));
+    }), new FakeTimeProvider(Now));
 
     [Fact]
     public void Visible_notification_targets_token_with_android_and_ios_settings()
@@ -31,6 +34,8 @@ public sealed class FcmMessageFactoryTests
         Assert.Equal(Priority.High, message.Android.Priority);
         Assert.Equal("alerts", message.Android.Notification.ChannelId);
         Assert.Equal("default", message.Android.Notification.Sound);
+        Assert.Equal(Now.UtcDateTime, message.Android.Notification.EventTimestamp);
+        Assert.Equal(DateTimeKind.Utc, message.Android.Notification.EventTimestamp.Kind);
 
         Assert.Equal("alert", message.Apns.Headers["apns-push-type"]);
         Assert.Equal("10", message.Apns.Headers["apns-priority"]);

@@ -30,6 +30,7 @@ public static class DependencyInjection
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPostConfigureOptions<FirebaseOptions>, FirebaseCredentialsPathResolver>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<FirebaseOptions>, FirebaseOptionsValidator>());
 
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<FcmMessageFactory>();
         services.TryAddSingleton<IPushNotificationSender, FirebaseMessagingSender>();
 

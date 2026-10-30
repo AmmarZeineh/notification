@@ -6,7 +6,7 @@ using FcmNotification = FirebaseAdmin.Messaging.Notification;
 namespace Notifications.Infrastructure.Firebase;
 
 /// <summary>Maps the provider-neutral <see cref="PushNotification"/> to FCM messages with Android and iOS settings.</summary>
-internal sealed class FcmMessageFactory(IOptions<FirebaseOptions> options)
+internal sealed class FcmMessageFactory(IOptions<FirebaseOptions> options, TimeProvider timeProvider)
 {
     private readonly FirebaseOptions _options = options.Value;
 
@@ -30,7 +30,7 @@ internal sealed class FcmMessageFactory(IOptions<FirebaseOptions> options)
         {
             Notification = CreateNotification(notification, dataOnly),
             Data = notification.Data,
-            Android = CreateAndroidConfig(dataOnly),
+            Android = CreateAndroidConfig(dataOnly, timeProvider.GetUtcNow()),
             Apns = CreateApnsConfig(notification, dataOnly),
         };
     }
@@ -55,7 +55,7 @@ internal sealed class FcmMessageFactory(IOptions<FirebaseOptions> options)
                 ImageUrl = notification.ImageUrl?.AbsoluteUri,
             };
 
-    private AndroidConfig CreateAndroidConfig(bool dataOnly) => new()
+    private AndroidConfig CreateAndroidConfig(bool dataOnly, DateTimeOffset sentAt) => new()
     {
         // High priority wakes the device so a visible notification is shown immediately. Silent data messages
         // use normal priority: Android demotes apps whose high-priority messages show nothing, which would
@@ -67,6 +67,9 @@ internal sealed class FcmMessageFactory(IOptions<FirebaseOptions> options)
             {
                 ChannelId = _options.AndroidChannelId,
                 Sound = _options.Sound,
+                // The SDK always sends event_time, as 0001-01-01 when unset, and Android shows it as the
+                // notification's date. Must be a UTC DateTime: the SDK converts any other kind as local time.
+                EventTimestamp = sentAt.UtcDateTime,
             },
     };
 
